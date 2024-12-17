@@ -16,6 +16,14 @@ youtube-dl - download videos from youtube.com or other video platforms
 - [BUGS](#bugs)
 - [COPYRIGHT](#copyright)
 
+# QUICKSTART
+
+替换如下YouTube视频地址即可，速度比较快！
+
+```shell
+python3 youtube_dl-quickstart.py --url "https://www.youtube.com/watch?v=bZQun8Y4L2A"
+```
+
 # INSTALLATION
 
 To install it right away for all UNIX users (Linux, macOS, etc.), type:
