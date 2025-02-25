@@ -20,7 +20,17 @@ def main():
   # 解析参数:
   args = parser.parse_args()
 
-  ydl_opts = {}
+  ydl_opts = {
+      # "cachedir": False
+      # "format": "mp4[height>=?1080]" # 没有声音
+      # "format": "bestvideo[height>=?1080]" # 没有声音
+      "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+      "writesubtitles": True,
+      # "writeautomaticsub": True,
+      "postprocessors": [{
+          "key": "FFmpegEmbedSubtitle"
+      }]
+  }
   with youtube_dl.YoutubeDL(ydl_opts) as ydl:
     ydl.download([args.url])
 
