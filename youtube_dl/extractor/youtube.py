@@ -27,6 +27,7 @@ from ..compat import (
 )
 from ..jsinterp import JSInterpreter
 from ..utils import (
+    bug_reports_message,
     clean_html,
     dict_get,
     error_to_compat_str,
@@ -65,6 +66,7 @@ from ..utils import (
     url_or_none,
     urlencode_postdata,
     urljoin,
+    variadic,
 )
 
 
@@ -89,12 +91,12 @@ class YoutubeBaseInfoExtractor(InfoExtractor):
             'INNERTUBE_CONTEXT': {
                 'client': {
                     'clientName': 'IOS',
-                    'clientVersion': '19.45.4',
+                    'clientVersion': '20.10.4',
                     'deviceMake': 'Apple',
                     'deviceModel': 'iPhone16,2',
-                    'userAgent': 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)',
+                    'userAgent': 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)',
                     'osName': 'iPhone',
-                    'osVersion': '18.1.0.22B83',
+                    'osVersion': '18.3.2.22D82',
                 },
             },
             'INNERTUBE_CONTEXT_CLIENT_NAME': 5,
@@ -107,7 +109,7 @@ class YoutubeBaseInfoExtractor(InfoExtractor):
             'INNERTUBE_CONTEXT': {
                 'client': {
                     'clientName': 'MWEB',
-                    'clientVersion': '2.20241202.07.00',
+                    'clientVersion': '2.20250311.03.00',
                     # mweb previously did not require PO Token with this UA
                     'userAgent': 'Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)',
                 },
@@ -120,7 +122,8 @@ class YoutubeBaseInfoExtractor(InfoExtractor):
             'INNERTUBE_CONTEXT': {
                 'client': {
                     'clientName': 'TVHTML5',
-                    'clientVersion': '7.20241201.18.00',
+                    'clientVersion': '7.20250312.16.00',
+                    'userAgent': 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version',
                 },
             },
             'INNERTUBE_CONTEXT_CLIENT_NAME': 7,
@@ -130,7 +133,7 @@ class YoutubeBaseInfoExtractor(InfoExtractor):
             'INNERTUBE_CONTEXT': {
                 'client': {
                     'clientName': 'WEB',
-                    'clientVersion': '2.20241126.01.00',
+                    'clientVersion': '2.20250312.04.00',
                 },
             },
             'INNERTUBE_CONTEXT_CLIENT_NAME': 1,
@@ -460,6 +463,26 @@ class YoutubeBaseInfoExtractor(InfoExtractor):
             'uploader': uploader,
         }
 
+    @staticmethod
+    def _extract_thumbnails(data, *path_list, **kw_final_key):
+        """
+        Extract thumbnails from thumbnails dict
+        @param path_list: path list to level that contains 'thumbnails' key
+        """
+        final_key = kw_final_key.get('final_key', 'thumbnails')
+
+        return traverse_obj(data, ((
+            tuple(variadic(path) + (final_key, Ellipsis)
+                  for path in path_list or [()])), {
+            'url': ('url', T(url_or_none),
+                    # Sometimes youtube gives a wrong thumbnail URL. See:
+                    # https://github.com/yt-dlp/yt-dlp/issues/233
+                    # https://github.com/ytdl-org/youtube-dl/issues/28023
+                    T(lambda u: update_url(u, query=None) if u and 'maxresdefault' in u else u)),
+            'height': ('height', T(int_or_none)),
+            'width': ('width', T(int_or_none)),
+        }, T(lambda t: t if t.get('url') else None)))
+
     def _search_results(self, query, params):
         data = {
             'context': {
@@ -669,9 +692,9 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
         'invidious': '|'.join(_INVIDIOUS_SITES),
     }
     _PLAYER_INFO_RE = (
-        r'/s/player/(?P<id>[a-zA-Z0-9_-]{8,})/player',
-        r'/(?P<id>[a-zA-Z0-9_-]{8,})/player(?:_ias\.vflset(?:/[a-zA-Z]{2,3}_[a-zA-Z]{2,3})?|-plasma-ias-(?:phone|tablet)-[a-z]{2}_[A-Z]{2}\.vflset)/base\.js$',
-        r'\b(?P<id>vfl[a-zA-Z0-9_-]+)\b.*?\.js$',
+        r'/s/player/(?P<id>[a-zA-Z0-9_-]{8,})/(?:tv-)?player',
+        r'/(?P<id>[a-zA-Z0-9_-]{8,})/player(?:_ias(?:_tce)?\.vflset(?:/[a-zA-Z]{2,3}_[a-zA-Z]{2,3})?|-plasma-ias-(?:phone|tablet)-[a-z]{2}_[A-Z]{2}\.vflset)/base\.js$',
+        r'\b(?P<id>vfl[a-zA-Z0-9_-]{6,})\b.*?\.js$',
     )
     _SUBTITLE_FORMATS = ('json3', 'srv1', 'srv2', 'srv3', 'ttml', 'vtt')
 
@@ -1603,15 +1626,13 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
         """ Return a string representation of a signature """
         return '.'.join(compat_str(len(part)) for part in example_sig.split('.'))
 
-    @classmethod
-    def _extract_player_info(cls, player_url):
-        for player_re in cls._PLAYER_INFO_RE:
-            id_m = re.search(player_re, player_url)
-            if id_m:
-                break
-        else:
-            raise ExtractorError('Cannot identify player %r' % player_url)
-        return id_m.group('id')
+    def _extract_player_info(self, player_url):
+        try:
+            return self._search_regex(
+                self._PLAYER_INFO_RE, player_url, 'player info', group='id')
+        except ExtractorError as e:
+            raise ExtractorError(
+                'Cannot identify player %r' % (player_url,), cause=e)
 
     def _load_player(self, video_id, player_url, fatal=True, player_id=None):
         if not player_id:
@@ -1688,6 +1709,23 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                 '    return %s\n') % (signature_id_tuple, expr_code)
         self.to_screen('Extracted signature function:\n' + code)
 
+    def _extract_sig_fn(self, jsi, funcname):
+        var_ay = self._search_regex(
+            r'''(?x)
+                (?:\*/|\{|\n|^)\s*(?:'[^']+'\s*;\s*)
+                    (var\s*[\w$]+\s*=\s*(?:
+                        ('|")(?:\\\2|(?!\2).)+\2\s*\.\s*split\(\s*('|")\W+\3\s*\)|
+                        \[\s*(?:('|")(?:\\\4|(?!\4).)*\4\s*(?:(?=\])|,\s*))+\]
+                    ))(?=\s*[,;])
+            ''', jsi.code, 'useful values', default='')
+
+        sig_fn = jsi.extract_function_code(funcname)
+
+        if var_ay:
+            sig_fn = (sig_fn[0], ';\n'.join((var_ay, sig_fn[1])))
+
+        return sig_fn
+
     def _parse_sig_js(self, jscode):
         # Examples where `sig` is funcname:
         # sig=function(a){a=a.split(""); ... ;return a.join("")};
@@ -1713,8 +1751,12 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
             jscode, 'Initial JS player signature function name', group='sig')
 
         jsi = JSInterpreter(jscode)
-        initial_function = jsi.extract_function(funcname)
-        return lambda s: initial_function([s])
+
+        initial_function = self._extract_sig_fn(jsi, funcname)
+
+        func = jsi.extract_function_from_code(*initial_function)
+
+        return lambda s: func([s])
 
     def _cached(self, func, *cache_id):
         def inner(*args, **kwargs):
@@ -1829,12 +1871,16 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
 
         if func_code:
             return jsi, player_id, func_code
+        return self._extract_n_function_code_jsi(video_id, jsi, player_id)
 
-        func_name = self._extract_n_function_name(jscode)
+    def _extract_n_function_code_jsi(self, video_id, jsi, player_id=None):
 
-        func_code = jsi.extract_function_code(func_name)
+        func_name = self._extract_n_function_name(jsi.code)
 
-        self.cache.store('youtube-nsig', player_id, func_code)
+        func_code = self._extract_sig_fn(jsi, func_name)
+
+        if player_id:
+            self.cache.store('youtube-nsig', player_id, func_code)
         return jsi, player_id, func_code
 
     def _extract_n_function_from_code(self, jsi, func_code):
@@ -2103,7 +2149,8 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                     video_details = merge_dicts(*traverse_obj(
                         (player_response, api_player_response),
                         (Ellipsis, 'videoDetails', T(dict))))
-                    player_response.update(api_player_response or {})
+                    player_response.update(filter_dict(
+                        api_player_response or {}, cndn=lambda k, _: k != 'captions'))
                     player_response['videoDetails'] = video_details
 
         def is_agegated(playability):
@@ -2533,8 +2580,8 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
         }
 
         pctr = traverse_obj(
-            player_response,
-            ('captions', 'playerCaptionsTracklistRenderer', T(dict)))
+            (player_response, api_player_response),
+            (Ellipsis, 'captions', 'playerCaptionsTracklistRenderer', T(dict)))
         if pctr:
             def process_language(container, base_url, lang_code, query):
                 lang_subs = []
@@ -2551,20 +2598,21 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
             def process_subtitles():
                 subtitles = {}
                 for caption_track in traverse_obj(pctr, (
-                        'captionTracks', lambda _, v: v.get('baseUrl'))):
+                        Ellipsis, 'captionTracks', lambda _, v: (
+                            v.get('baseUrl') and v.get('languageCode')))):
                     base_url = self._yt_urljoin(caption_track['baseUrl'])
                     if not base_url:
                         continue
+                    lang_code = caption_track['languageCode']
                     if caption_track.get('kind') != 'asr':
-                        lang_code = caption_track.get('languageCode')
-                        if not lang_code:
-                            continue
                         process_language(
                             subtitles, base_url, lang_code, {})
                         continue
                     automatic_captions = {}
+                    process_language(
+                        automatic_captions, base_url, lang_code, {})
                     for translation_language in traverse_obj(pctr, (
-                            'translationLanguages', lambda _, v: v.get('languageCode'))):
+                            Ellipsis, 'translationLanguages', lambda _, v: v.get('languageCode'))):
                         translation_language_code = translation_language['languageCode']
                         process_language(
                             automatic_captions, base_url, translation_language_code,
@@ -3183,8 +3231,12 @@ class YoutubeTabIE(YoutubeBaseInfoExtractor):
             expected_type=txt_or_none)
 
     def _grid_entries(self, grid_renderer):
-        for item in grid_renderer['items']:
-            if not isinstance(item, dict):
+        for item in traverse_obj(grid_renderer, ('items', Ellipsis, T(dict))):
+            lockup_view_model = traverse_obj(item, ('lockupViewModel', T(dict)))
+            if lockup_view_model:
+                entry = self._extract_lockup_view_model(lockup_view_model)
+                if entry:
+                    yield entry
                 continue
             renderer = self._extract_grid_item_renderer(item)
             if not isinstance(renderer, dict):
@@ -3267,6 +3319,25 @@ class YoutubeTabIE(YoutubeBaseInfoExtractor):
             if not video_id:
                 continue
             yield self._extract_video(renderer)
+
+    def _extract_lockup_view_model(self, view_model):
+        content_id = view_model.get('contentId')
+        if not content_id:
+            return
+        content_type = view_model.get('contentType')
+        if content_type not in ('LOCKUP_CONTENT_TYPE_PLAYLIST', 'LOCKUP_CONTENT_TYPE_PODCAST'):
+            self.report_warning(
+                'Unsupported lockup view model content type "{0}"{1}'.format(content_type, bug_reports_message()), only_once=True)
+            return
+        return merge_dicts(self.url_result(
+            update_url_query('https://www.youtube.com/playlist', {'list': content_id}),
+            ie=YoutubeTabIE.ie_key(), video_id=content_id), {
+                'title': traverse_obj(view_model, (
+                    'metadata', 'lockupMetadataViewModel', 'title', 'content', T(compat_str))),
+                'thumbnails': self._extract_thumbnails(view_model, (
+                    'contentImage', 'collectionThumbnailViewModel', 'primaryThumbnail',
+                    'thumbnailViewModel', 'image'), final_key='sources'),
+        })
 
     def _video_entry(self, video_renderer):
         video_id = video_renderer.get('videoId')
